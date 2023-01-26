@@ -135,6 +135,16 @@ func SetAuthURLParam(key, value string) AuthCodeOption {
 	return setParam{key, value}
 }
 
+type TokenSourceOption interface {
+	setValue(url.Values)
+}
+
+// SetTokenSourceURLParam builds an AuthCodeOption which passes key/value parameters
+// to a provider's authorization endpoint.
+func SetTokenSourceURLParam(key, value string) TokenSourceOption {
+	return setParam{key, value}
+}
+
 // AuthCodeURL returns a URL to OAuth 2.0 provider's consent page
 // that asks for permissions for the required scopes explicitly.
 //
@@ -228,18 +238,19 @@ func (c *Config) Exchange(ctx context.Context, code string, opts ...AuthCodeOpti
 // The token will auto-refresh as necessary. The underlying
 // HTTP transport will be obtained using the provided context.
 // The returned client and its Transport should not be modified.
-func (c *Config) Client(ctx context.Context, t *Token) *http.Client {
-	return NewClient(ctx, c.TokenSource(ctx, t))
+func (c *Config) Client(ctx context.Context, t *Token, opts ...TokenSourceOption) *http.Client {
+	return NewClient(ctx, c.TokenSource(ctx, t, opts...))
 }
 
 // TokenSource returns a TokenSource that returns t until t expires,
 // automatically refreshing it as necessary using the provided context.
 //
 // Most users will use Config.Client instead.
-func (c *Config) TokenSource(ctx context.Context, t *Token) TokenSource {
+func (c *Config) TokenSource(ctx context.Context, t *Token, opts ...TokenSourceOption) TokenSource {
 	tkr := &tokenRefresher{
 		ctx:  ctx,
 		conf: c,
+		opts: opts,
 	}
 	if t != nil {
 		tkr.refreshToken = t.RefreshToken
@@ -255,6 +266,7 @@ func (c *Config) TokenSource(ctx context.Context, t *Token) TokenSource {
 type tokenRefresher struct {
 	ctx          context.Context // used to get HTTP requests
 	conf         *Config
+	opts         []TokenSourceOption
 	refreshToken string
 }
 
@@ -267,11 +279,15 @@ func (tf *tokenRefresher) Token() (*Token, error) {
 		return nil, errors.New("oauth2: token expired and refresh token is not set")
 	}
 
-	tk, err := retrieveToken(tf.ctx, tf.conf, url.Values{
+	v := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {tf.refreshToken},
-	})
+	}
+	for _, opt := range tf.opts {
+		opt.setValue(v)
+	}
 
+	tk, err := retrieveToken(tf.ctx, tf.conf, v)
 	if err != nil {
 		return nil, err
 	}
